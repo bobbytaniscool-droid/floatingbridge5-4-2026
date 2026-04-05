@@ -109,8 +109,7 @@
       get: async (key) => {
         try {
           const snapshot = await db.ref('rooms/' + key).once('value');
-          const val = snapshot.val();
-          return val ? { value: val } : null;
+          return snapshot.val(); // FIXED: Returns data directly, preventing the disappearing code!
         } catch (e) {
           return null;
         }
@@ -149,7 +148,6 @@
       return a;
     }
 
-    // UPDATED: Automatically reshuffle if anyone is dealt less than 4 HCP
     function dealCards() {
       let h;
       let valid = false;
@@ -517,14 +515,12 @@
       const [result,      setResult]      = useState(null);
       const [trumpBroken, setTrumpBroken] = useState(false);
       
-      // Partner State
       const [partnerBanner, setPartnerBanner] = useState("");
       const [partnerRevealed, setPartnerRevealed] = useState(false);
 
       const [pSuit,       setPSuit]       = useState("S");
       const [pRank,       setPRank]       = useState("A");
       
-      // UI Modals
       const [showBid,     setShowBid]     = useState(false);
       const [peeking,     setPeeking]     = useState(false); 
       const [reviewingBids, setReviewingBids] = useState(false);
@@ -630,7 +626,7 @@
         if (mode === "online" && p === iAm) isHuman = true;
 
         if (isHuman) {
-          if (mode === "passplay" && ppFor !== p) { 
+          if (mode === "passplay" && R.current.ppFor !== p) { 
             setMyIdx(p); setPpFor(p); setPpCtx("bid"); setPhase("ppShow"); return; 
           }
           setShowBid(true);
@@ -734,7 +730,7 @@
         if (mode === "online" && p === iAm) isHuman = true;
 
         if (isHuman) {
-          if (mode === "passplay" && ppFor !== p) { 
+          if (mode === "passplay" && R.current.ppFor !== p) { 
             setMyIdx(p); setPpFor(p); setPpCtx("play"); setPhase("ppShow"); 
           }
           return;
@@ -846,18 +842,13 @@
         });
       }
 
-      // ── RENDER ENGINE ────────────────────────────────────────────────
-      // We process the overlays first so they can be injected into the main view safely
-      
       let activeOverlay = null;
 
       if (phase === "viewHand") {
         activeOverlay = (
           <HandViewer 
-            hand={hands?.[myIdx]||[]} 
-            playerName={names[myIdx]} 
-            subtitle="Review your cards before bidding" 
-            btnLabel="I'm Ready to Bid" 
+            hand={hands?.[myIdx]||[]} playerName={names[myIdx]} 
+            subtitle="Review your cards before bidding" btnLabel="I'm Ready to Bid" 
             onContinue={() => pushState({phase: "bidding"})} 
             onQuit={() => setShowQuit(true)}
           />
@@ -865,10 +856,8 @@
       } else if (phase === "viewHandPartner") {
         activeOverlay = (
           <HandViewer 
-            hand={hands?.[contract?.declarer||0]||[]} 
-            playerName={names[contract?.declarer||0]} 
-            subtitle="You won the bid! Call a partner card you do NOT hold." 
-            btnLabel="Choose Partner Card →" 
+            hand={hands?.[contract?.declarer||0]||[]} playerName={names[contract?.declarer||0]} 
+            subtitle="You won the bid! Call a partner card you do NOT hold." btnLabel="Choose Partner Card →" 
             onContinue={() => { setPhase("partner"); setShowPartner(true); }} 
             onQuit={() => setShowQuit(true)}
           />
@@ -885,10 +874,7 @@
       } else if (phase === "ppReveal") {
         activeOverlay = (
           <HandViewer 
-            hand={hands?.[ppFor]||[]} 
-            playerName={names[ppFor]} 
-            subtitle="Review your hand" 
-            btnLabel="Play My Turn" 
+            hand={hands?.[ppFor]||[]} playerName={names[ppFor]} subtitle="Review your hand" btnLabel="Play My Turn" 
             onContinue={() => { 
               const c = ppCtx; 
               setPhase(c==="bid" ? "bidding" : c==="partner" ? "partner" : "playing"); 
@@ -1246,7 +1232,7 @@
           )}
 
           {showQuit && (
-            <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.88)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <div style={{ position:"fixed", inset:0, background:"var(--modal-bg)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center" }}>
               <div style={{ background:"var(--surface)", border:"2px solid var(--danger)", borderRadius:20, padding:"28px 22px", textAlign:"center", maxWidth:300, width:"90%" }}>
                 <div style={{ fontSize:40, marginBottom:8 }}>⚠️</div>
                 <div style={{ fontSize:20, color:"var(--danger)", marginBottom:20, fontWeight:700 }}>Quit Game?</div>
@@ -1346,7 +1332,7 @@
           if(!room.players.find(p=>p.seat===i)) room.players.push({name:["South","West","North","East"][i], seat:i, isAI:true}); 
         }
         room.started=true; 
-        // GameScreen Host deals the cards and pushes initial game state
+        room.gameState={hands:dealCards(), bids:[null,null,null,null], curBidder:0, passRun:0, contract:null, trick:[], curPlayer:0, tricks:[0,0,0,0], phase:"bidding", scores:{ns:0,ew:0}, history:[], log:[]}; 
         await window.storage.set(waiting.code, room); 
       }
       
@@ -1356,9 +1342,31 @@
         return (
           <div style={{ position:"fixed", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:16 }}>
             <div style={{ background:"var(--surface)", border:"1px solid var(--surface-border)", borderRadius:16, padding:22, width:"90%", maxWidth:360 }}>
-              <div style={{ color:"var(--accent)", fontSize:20, fontWeight:700, textAlign:"center", marginBottom:14 }}>Waiting... Code: {waiting.code}</div>
-              {mySeat===0 && <Btn gold onClick={startGame}>Start Game →</Btn>}
-              <Btn outline onClick={onBack}>Leave</Btn>
+              <div style={{ color:"var(--accent)", fontSize:20, fontWeight:700, textAlign:"center", marginBottom:4 }}>Waiting for Players</div>
+              
+              {/* THIS MAKES THE ROOM CODE VISIBLE PERMANENTLY */}
+              <div style={{ fontFamily:"Georgia,serif", fontSize:42, color:"var(--accent)", textAlign:"center", letterSpacing:10, padding:12, background:"var(--table-bg)", borderRadius:10, marginBottom:14 }}>
+                {waiting.code}
+              </div>
+
+              {[0,1,2,3].map(i => {
+                const p = waiting.players && waiting.players.find(x => x.seat===i);
+                return (
+                  <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderRadius:8, background:"var(--table-bg)", marginBottom:6 }}>
+                    <div style={{ fontSize:18 }}>{p?"👤":"⏳"}</div>
+                    <div style={{ color:p?"var(--text)":"var(--text-muted)", fontSize:14, flex:1 }}>
+                      {p ? p.name : ["South","West","North","East"][i]+" (empty)"}
+                    </div>
+                    <div style={{ fontSize:11, color:p?"#66bb6a":"var(--text-muted)" }}>{p?"Ready":"—"}</div>
+                  </div>
+                );
+              })}
+
+              <div style={{ marginTop:14 }}>
+                {mySeat===0 && <Btn gold onClick={startGame}>{waiting.players && waiting.players.length>=4 ? "Start Game →" : "Start (AI fills empty) →"}</Btn>}
+                {mySeat!==0 && <div style={{ color:"var(--text-muted)", fontSize:13, textAlign:"center", padding:"10px 0" }}>Waiting for host to start...</div>}
+                <Btn outline onClick={onBack}>Leave Room</Btn>
+              </div>
             </div>
           </div>
         );
