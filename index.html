@@ -1,0 +1,1415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Floating Bridge</title>
+  
+  <link rel="manifest" href="manifest.json" />
+
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.3/babel.min.js"></script>
+  
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+  
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; font-family: Georgia, serif; background: #0a3d1f; color: white; }
+    * { box-sizing: border-box; transition: background 0.3s, color 0.3s, border-color 0.3s; }
+    
+    /* ── THEME ENGINE ── */
+    :root[data-theme="dark"] {
+      --bg-grad: radial-gradient(ellipse at 40% 30%,#1a7a3e,#0a3d1f 70%);
+      --bg-game: radial-gradient(ellipse at 50% 40%,#1a7a3e,#0d5c2e 60%,#062015);
+      --surface: #0f2d1a;
+      --surface-border: rgba(240,192,64,.35);
+      --text: #ffffff;
+      --text-muted: #a8d5b5;
+      --accent: #f0c040;
+      --accent-bg: linear-gradient(135deg,#f0c040,#c89b20);
+      --accent-text: #1a1a1a;
+      --table-bg: rgba(0,0,0,.45);
+      --modal-bg: rgba(0,0,0,.92);
+      --danger: #ff6b6b;
+    }
+    :root[data-theme="light"] {
+      --bg-grad: radial-gradient(ellipse at 40% 30%,#dcedc8,#8bc34a 70%);
+      --bg-game: radial-gradient(ellipse at 50% 40%,#f1f8e9,#c5e1a5 60%,#9ccc65);
+      --surface: #ffffff;
+      --surface-border: #7cb342;
+      --text: #111111;
+      --text-muted: #33691e;
+      --accent: #2e7d32;
+      --accent-bg: linear-gradient(135deg,#4caf50,#2e7d32);
+      --accent-text: #ffffff;
+      --table-bg: rgba(255,255,255,.5);
+      --modal-bg: rgba(255,255,255,.9);
+      --danger: #d32f2f;
+    }
+    :root[data-theme="hc"] {
+      --bg-grad: #000000;
+      --bg-game: #000000;
+      --surface: #000000;
+      --surface-border: #ffff00;
+      --text: #ffffff;
+      --text-muted: #ffffff;
+      --accent: #00ffff;
+      --accent-bg: #00ffff;
+      --accent-text: #000000;
+      --table-bg: transparent;
+      --modal-bg: rgba(0,0,0,.98);
+      --danger: #ff0000;
+    }
+    
+    body { background: var(--bg-grad); color: var(--text); }
+  </style>
+
+  <script>
+    window.addEventListener('error', function(e) {
+      document.body.innerHTML = '<div style="padding:20px; color:#ff6b6b; font-family:sans-serif; background:#111; height:100vh;">' +
+        '<h2>⚠️ Something broke!</h2><p><strong>Error:</strong> ' + e.message + '</p></div>';
+    });
+  </script>
+</head>
+<body>
+  <div id="root" style="display:flex; justify-content:center; align-items:center; height:100vh; font-size:24px; color:#f0c040;">
+    Loading Game...
+  </div>
+
+  <script type="text/babel" data-presets="react,env">
+    const { useState, useEffect, useRef } = React;
+
+    // ── FIREBASE CLOUD SETUP ─────────────────────────────────────────
+    const firebaseConfig = {
+      apiKey: "AIzaSyBg4G0xJsFMOsqkdgI2XX_vTMOjG_t2FoU",
+      authDomain: "floating-bridge-30e91.firebaseapp.com",
+      databaseURL: "https://floating-bridge-30e91-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "floating-bridge-30e91",
+      storageBucket: "floating-bridge-30e91.firebasestorage.app",
+      messagingSenderId: "368489379252",
+      appId: "1:368489379252:web:5553c1ecf22350acadeee1",
+      measurementId: "G-G2Y1QV8VE1"
+    };
+
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const db = firebase.database();
+
+    window.storage = {
+      set: async (key, val) => {
+        try {
+          return await db.ref('rooms/' + key).set(val);
+        } catch (e) {
+          console.error(e);
+          alert("Database Error! Make sure your Firebase Rules are set to true.");
+        }
+      },
+      get: async (key) => {
+        try {
+          const snapshot = await db.ref('rooms/' + key).once('value');
+          const val = snapshot.val();
+          return val ? { value: val } : null;
+        } catch (e) {
+          return null;
+        }
+      }
+    };
+    // ─────────────────────────────────────────────────────────────
+
+    const SUITS      = ["S","H","D","C"];
+    const SYM        = { S:"♠", H:"♥", D:"♦", C:"♣" };
+    const RANKS      = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
+    const SUIT_ORDER = { C:0, D:1, H:2, S:3, N:4 };
+    const BID_SUITS  = ["C","D","H","S","N"];
+
+    const bidLabel = b => b.suit === "N" ? `${b.level}NT` : `${b.level}${SYM[b.suit]}`;
+
+    const ALL_BIDS = [];
+    for (let lv = 1; lv <= 7; lv++) {
+      for (const s of BID_SUITS) {
+        ALL_BIDS.push({ level:lv, suit:s, label: bidLabel({level:lv,suit:s}) });
+      }
+    }
+
+    const rv     = r => RANKS.indexOf(r);
+    const isRed  = s => s === "H" || s === "D";
+    const bidIdx = b => SUIT_ORDER[b.suit] + (b.level - 1) * 5;
+    const hcp    = h => h.reduce((s,c) => s + ({A:4,K:3,Q:2,J:1}[c.rank]||0), 0);
+
+    const buildDeck = () => SUITS.flatMap(s => RANKS.map(r => ({ suit:s, rank:r, id:r+s })));
+
+    function shuffle(a) {
+      a = [...a];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
+    // UPDATED: Automatically reshuffle if anyone is dealt less than 4 HCP
+    function dealCards() {
+      let h;
+      let valid = false;
+      while (!valid) {
+        const d = shuffle(buildDeck());
+        h = [d.slice(0,13), d.slice(13,26), d.slice(26,39), d.slice(39,52)];
+        
+        let hasTerribleHand = false;
+        for (let i = 0; i < 4; i++) {
+          if (hcp(h[i]) < 4) { 
+            hasTerribleHand = true;
+            break;
+          }
+        }
+        
+        if (!hasTerribleHand) {
+          valid = true;
+        }
+      }
+      return h;
+    }
+
+    function sortHand(h) {
+      return [...h].sort((a,b) =>
+        (SUIT_ORDER[a.suit] - SUIT_ORDER[b.suit]) || rv(b.rank) - rv(a.rank)
+      );
+    }
+
+    function legalCards(hands, player, trick, contract, trumpBroken, style) {
+      const h     = hands[player] || [];
+      const trump = contract ? contract.suit : null;
+      const isNT  = trump === "N";
+      if (trick.length === 0) {
+        if (!isNT && trump && style === "B" && !trumpBroken) {
+          const nonTrump = h.filter(c => c.suit !== trump);
+          return nonTrump.length > 0 ? nonTrump : h;
+        }
+        return h;
+      }
+      const lead = trick[0].card.suit;
+      const fs   = h.filter(c => c.suit === lead);
+      return fs.length ? fs : h;
+    }
+
+    function calcWinner(trick, trump) {
+      const lead = trick[0].card.suit;
+      const isNT = trump === "N";
+      let best = 0;
+      for (let i = 1; i < trick.length; i++) {
+        const c = trick[i].card, b = trick[best].card;
+        if (isNT) {
+          if (c.suit === lead && rv(c.rank) > rv(b.rank)) best = i;
+        } else {
+          if (c.suit === b.suit) { if (rv(c.rank) > rv(b.rank)) best = i; }
+          else if (c.suit === trump && b.suit !== trump) best = i;
+        }
+      }
+      return trick[best].player;
+    }
+
+    function firstLeader(declarer, trump, style) {
+      if (style === "A") return (declarer + 1) % 4;
+      if (trump === "N") return declarer;
+      return (declarer + 1) % 4;
+    }
+
+    function aiBidChoice(hands, player, topIdx) {
+      const h = hands[player] || [];
+      const pts = hcp(h);
+      if (pts < 13) return null;
+
+      const maxLv = pts >= 22 ? 4 : pts >= 19 ? 3 : pts >= 16 ? 2 : 1;
+      const sc = {};
+      for (const s of SUITS) sc[s] = h.filter(c => c.suit === s).length;
+      const balanced = Object.values(sc).every(n => n >= 2 && n <= 5);
+      const bestSuit = SUITS.reduce((a,b) =>
+        sc[a] > sc[b] ? a : (sc[a] === sc[b] && SUIT_ORDER[a] > SUIT_ORDER[b] ? a : b)
+      );
+
+      if (balanced && pts >= 15) {
+        const ntBids = ALL_BIDS.filter(b => bidIdx(b) > topIdx && b.suit === "N" && b.level <= maxLv);
+        if (ntBids.length) return ntBids[0];
+      }
+
+      const valid = ALL_BIDS.filter(b => bidIdx(b) > topIdx && b.suit !== "N" && b.level <= maxLv);
+      if (!valid.length) return null;
+      return valid.find(b => b.suit === bestSuit) || valid[0];
+    }
+
+    function aiPlayChoice(hands, player, trick, contract, trumpBroken, style) {
+      const lg = legalCards(hands, player, trick, contract, trumpBroken, style);
+      if (!trick.length) return lg.sort((a,b) => rv(b.rank) - rv(a.rank))[0];
+      const winning = lg.filter(c =>
+        calcWinner([...trick, {player, card:c}], contract.suit) === player
+      );
+      if (winning.length) return winning.sort((a,b) => rv(a.rank) - rv(b.rank))[0];
+      return lg.sort((a,b) => rv(a.rank) - rv(b.rank))[0];
+    }
+
+    function aiPartnerChoice(hands, declarer) {
+      const mine   = hands[declarer] || [];
+      const notOwn = buildDeck().filter(c => !mine.find(x => x.id === c.id));
+      return notOwn.sort((a,b) => rv(b.rank) - rv(a.rank))[0];
+    }
+
+    function ThemeToggle({ theme, setTheme }) {
+      return (
+        <button 
+          onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "hc" : "dark")}
+          style={{ 
+            position:"absolute", top:12, right:12, zIndex:100, 
+            background:"var(--surface)", border:"1px solid var(--surface-border)", 
+            color:"var(--text)", padding:"6px 14px", borderRadius:20, 
+            cursor:"pointer", fontWeight:700, fontSize:12, fontFamily:"Georgia,serif" 
+          }}>
+          🎨 {theme === "dark" ? "Dark Mode" : theme === "light" ? "Light Mode" : "High Contrast"}
+        </button>
+      );
+    }
+
+    function Btn({ children, onClick, gold, outline, blue, disabled, style={} }) {
+      return (
+        <button 
+          onClick={onClick} 
+          disabled={disabled} 
+          style={{
+            display:"block", width:"100%", maxWidth:300, 
+            padding:"13px 22px", borderRadius:12,
+            border: outline ? `2px solid var(--accent)` : blue ? "2px solid #64b5f6" : "none",
+            fontFamily:"Georgia,serif", fontSize:16, fontWeight:700, 
+            cursor: disabled ? "default" : "pointer",
+            background: gold ? "var(--accent-bg)" : "transparent",
+            color: gold ? "var(--accent-text)" : blue ? "#64b5f6" : "var(--accent)",
+            margin:"5px 0", opacity: disabled ? 0.4 : 1, ...style
+          }}>
+          {children}
+        </button>
+      );
+    }
+
+    function Toast({ msg }) {
+      if (!msg) return null;
+      return (
+        <div style={{ 
+          position:"fixed", top:54, left:"50%", transform:"translateX(-50%)",
+          background:"var(--modal-bg)", border:`1px solid var(--accent)`, borderRadius:20,
+          padding:"8px 20px", color:"var(--accent)", fontSize:13, zIndex:99, whiteSpace:"nowrap",
+          pointerEvents:"none", boxShadow:"0 4px 20px rgba(0,0,0,.5)" 
+        }}>
+          {msg}
+        </div>
+      );
+    }
+
+    function CardFace({ card, selected, dimmed, onClick, size="md" }) {
+      const w = size === "sm" ? 38 : 52;
+      const h = size === "sm" ? 54 : 76;
+      const red = isRed(card.suit);
+      
+      return (
+        <div onClick={onClick} style={{ 
+          width:w, height:h, borderRadius:8,
+          background: selected ? "#fffbe6" : "#fff", 
+          border: selected ? `3px solid var(--accent)` : "2px solid #ccc",
+          display:"flex", flexDirection:"column", padding:"4px 5px", 
+          cursor: onClick ? "pointer" : "default", flexShrink:0,
+          boxShadow: selected ? "0 10px 28px rgba(0,0,0,.6)" : "0 3px 10px rgba(0,0,0,.4)",
+          transform: selected ? "translateY(-18px)" : "none", 
+          opacity: dimmed ? 0.32 : 1, userSelect:"none" 
+        }}>
+          <div style={{ fontSize:size==="sm"?11:14, fontWeight:"bold", color:red?"#cc0000":"#111", lineHeight:1 }}>
+            {card.rank}
+          </div>
+          <div style={{ fontSize:size==="sm"?13:17, color:red?"#cc0000":"#111", lineHeight:1, marginTop:1 }}>
+            {SYM[card.suit]}
+          </div>
+        </div>
+      );
+    }
+
+    function CardBack({ col }) {
+      return (
+        <div style={{ 
+          width:col?18:22, height:col?28:32, borderRadius:4, 
+          background:"linear-gradient(135deg,#1565c0,#0d47a1)", 
+          border:"1.5px solid #42a5f5", flexShrink:0 
+        }} />
+      );
+    }
+
+    function HandViewer({ hand, playerName, subtitle, btnLabel, onContinue, onQuit }) {
+      const bySuit = { S:[], H:[], D:[], C:[] };
+      for (const c of sortHand(hand || [])) {
+        bySuit[c.suit].push(c);
+      }
+      const pts = hcp(hand || []);
+      
+      return (
+        <div style={{ 
+          position:"fixed", inset:0, background:"var(--surface)", 
+          zIndex:90, display:"flex", flexDirection:"column", 
+          alignItems:"center", justifyContent:"center", padding:16 
+        }}>
+          <div style={{ color:"var(--accent)", fontSize:22, fontWeight:700, marginBottom:2, textAlign:"center" }}>
+            {playerName}'s Hand
+          </div>
+          <div style={{ color:"var(--text-muted)", fontSize:13, marginBottom:18, textAlign:"center" }}>
+            {subtitle}
+          </div>
+          <div style={{ 
+            background:"var(--table-bg)", border:"1px solid var(--surface-border)", 
+            borderRadius:16, padding:16, width:"100%", maxWidth:420 
+          }}>
+            {["S","H","D","C"].map(s => bySuit[s].length === 0 ? null : (
+              <div key={s} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+                <div style={{ fontSize:22, color:isRed(s)?"#cc0000":"var(--text)", width:26, textAlign:"center", flexShrink:0 }}>
+                  {SYM[s]}
+                </div>
+                <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                  {bySuit[s].map(c => (
+                    <div key={c.id} style={{ 
+                      background:"#fff", borderRadius:6, padding:"5px 9px", 
+                      fontSize:16, fontWeight:"bold", color:isRed(s)?"#cc0000":"#111", 
+                      border:"1.5px solid #ccc" 
+                    }}>
+                      {c.rank}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div style={{ color:"var(--text-muted)", fontSize:12, marginTop:8, borderTop:"1px solid var(--surface-border)", paddingTop:8 }}>
+              HCP: <b style={{ color:"var(--accent)" }}>{pts}</b>
+            </div>
+          </div>
+          <button onClick={onContinue} style={{ 
+            marginTop:20, background:"var(--accent-bg)", color:"var(--accent-text)", 
+            border:"none", borderRadius:12, padding:"14px 40px", fontSize:17, 
+            fontWeight:700, cursor:"pointer", width:"100%", maxWidth: 300 
+          }}>
+            {btnLabel}
+          </button>
+          
+          {onQuit && (
+            <button onClick={onQuit} style={{ 
+              marginTop:15, background:"transparent", color:"var(--danger)", 
+              border:"1px solid var(--danger)", borderRadius:12, padding:"10px 40px", 
+              fontSize:15, fontWeight:700, cursor:"pointer", width:"100%", maxWidth: 300 
+            }}>
+              Quit Game
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    function App() {
+      const [theme,  setTheme]  = useState("dark");
+      const [screen, setScreen] = useState("menu");
+      const [mode,   setMode]   = useState("solo");
+      const [names,  setNames]  = useState(["You","West","North","East"]);
+      const [style,  setStyle]  = useState("A");
+      const [room,   setRoom]   = useState(null);
+
+      useEffect(() => { 
+        document.documentElement.setAttribute('data-theme', theme); 
+      }, [theme]);
+      
+      const goMenu = () => { 
+        setScreen("menu"); 
+        setRoom(null); 
+      };
+
+      return (
+        <React.Fragment>
+          {screen !== "game" && <ThemeToggle theme={theme} setTheme={setTheme} />}
+          
+          {screen==="tut" && (
+            <TutScreen onBack={() => setScreen("menu")} onPlay={() => setScreen("mode")} />
+          )}
+          
+          {screen==="mode" && (
+            <ModeScreen 
+              onSolo={() => { setMode("solo"); setNames(["You","West","North","East"]); setScreen("game"); }} 
+              onPP={() => setScreen("lobby")} 
+              onOnline={() => setScreen("online")} 
+              onBack={() => setScreen("menu")} 
+            />
+          )}
+          
+          {screen==="lobby" && (
+            <LobbyScreen 
+              onStart={n => { setMode("passplay"); setNames(n); setScreen("game"); }} 
+              onBack={() => setScreen("mode")} 
+            />
+          )}
+          
+          {screen==="online" && (
+            <OnlineSetup 
+              onJoined={(r,n) => { setRoom(r); setNames(n); setMode("online"); setScreen("game"); }} 
+              onBack={() => setScreen("mode")} 
+            />
+          )}
+          
+          {screen==="game" && (
+            <GameScreen 
+              key={mode+(room?.code||"")} 
+              mode={mode} names={names} 
+              gameStyle={style} onlineRoom={room} 
+              onMenu={goMenu} theme={theme} setTheme={setTheme} 
+            />
+          )}
+          
+          {screen==="menu" && (
+            <div style={{ position:"fixed", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:16 }}>
+              <div style={{ fontSize:52, marginBottom:8, textAlign:"center" }}>🂡🂱🃁🃑</div>
+              <div style={{ fontSize:"clamp(24px,7vw,44px)", color:"var(--accent)", textAlign:"center", letterSpacing:2, marginBottom:4, fontWeight:700 }}>Floating Bridge</div>
+              <div style={{ color:"var(--text-muted)", fontSize:13, letterSpacing:3, textTransform:"uppercase", marginBottom:22 }}>The Classic Card Game</div>
+
+              <div style={{ background:"var(--table-bg)", border:"1px solid var(--surface-border)", borderRadius:14, padding:"14px 16px", width:"100%", maxWidth:300, marginBottom:18 }}>
+                <div style={{ color:"var(--accent)", fontSize:13, fontWeight:700, marginBottom:10, textAlign:"center" }}>Game Style</div>
+                <div style={{ display:"flex", gap:8 }}>
+                  {["A","B"].map(s => (
+                    <button key={s} onClick={() => setStyle(s)} style={{ 
+                      flex:1, padding:"10px 8px", borderRadius:10, cursor:"pointer", 
+                      fontSize:14, fontWeight:700, border:`2px solid ${style===s ? "var(--accent)" : "var(--surface-border)"}`, 
+                      background: style===s ? "var(--accent-bg)" : "transparent", 
+                      color: style===s ? "var(--accent-text)" : "var(--accent)" 
+                    }}>
+                      Style {s}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ color:"var(--text-muted)", fontSize:11, marginTop:10, lineHeight:1.6 }}>
+                  {style==="A" ? "Trump can be led anytime. Left of declarer always leads first trick." : "Trump only after broken by a ruff. If No Trump: declarer leads."}
+                </div>
+              </div>
+
+              <Btn gold onClick={() => setScreen("mode")}>▶ Play Game</Btn>
+              <Btn outline onClick={() => setScreen("tut")}>📖 How to Play</Btn>
+            </div>
+          )}
+        </React.Fragment>
+      );
+    }
+
+    function GameScreen({ mode, names, gameStyle, onlineRoom, onMenu, theme, setTheme }) {
+      const [hands,       setHands]       = useState(null);
+      const [bids,        setBids]        = useState([null,null,null,null]);
+      const [bidLog,      setBidLog]      = useState([]); 
+      const [curBidder,   setCurBidder]   = useState(0);
+      const [passRun,     setPassRun]     = useState(0);
+      const [contract,    setContract]    = useState(null);
+      const [trick,       setTrick]       = useState([]);
+      const [curPlayer,   setCurPlayer]   = useState(0);
+      const [tricks,      setTricks]      = useState([0,0,0,0]);
+      const [phase,       setPhase]       = useState("init");
+      const [sel,         setSel]         = useState(null);
+      const [scores,      setScores]      = useState({ ns:0, ew:0 });
+      const [history,     setHistory]     = useState([]);
+      const [myIdx,       setMyIdx]       = useState(onlineRoom ? onlineRoom.mySeat : 0);
+      const [toastMsg,    setToastMsg]    = useState("");
+      const [thinking,    setThinking]    = useState(false);
+      const [log,         setLog]         = useState([]);
+      const [result,      setResult]      = useState(null);
+      const [trumpBroken, setTrumpBroken] = useState(false);
+      
+      // Partner State
+      const [partnerBanner, setPartnerBanner] = useState("");
+      const [partnerRevealed, setPartnerRevealed] = useState(false);
+
+      const [pSuit,       setPSuit]       = useState("S");
+      const [pRank,       setPRank]       = useState("A");
+      
+      // UI Modals
+      const [showBid,     setShowBid]     = useState(false);
+      const [peeking,     setPeeking]     = useState(false); 
+      const [reviewingBids, setReviewingBids] = useState(false);
+      const [showPartner, setShowPartner] = useState(false);
+      const [showScore,   setShowScore]   = useState(false);
+      const [showQuit,    setShowQuit]    = useState(false);
+      
+      const [ppCtx,       setPpCtx]       = useState("");
+      const [ppFor,       setPpFor]       = useState(-1);
+
+      const R = useRef({});
+      R.current = { hands, bids, curBidder, passRun, contract, trick, curPlayer, tricks, phase, myIdx, ppCtx, ppFor, scores, history, trumpBroken, bidLog, log, result, partnerBanner, partnerRevealed };
+
+      const toast  = msg => { setToastMsg(msg); setTimeout(() => setToastMsg(""), 3200); };
+      const addLog = msg => setLog(p => [...p.slice(-5), msg]);
+
+      // ── MULTIPLAYER SYNC ENGINE ──
+      const applySharedState = (gs) => {
+        if (gs.hands !== undefined) setHands(gs.hands);
+        if (gs.bids !== undefined) setBids(gs.bids);
+        if (gs.bidLog !== undefined) setBidLog(gs.bidLog);
+        if (gs.curBidder !== undefined) setCurBidder(gs.curBidder);
+        if (gs.passRun !== undefined) setPassRun(gs.passRun);
+        if (gs.contract !== undefined) setContract(gs.contract);
+        if (gs.trick !== undefined) setTrick(gs.trick);
+        if (gs.curPlayer !== undefined) setCurPlayer(gs.curPlayer);
+        if (gs.tricks !== undefined) setTricks(gs.tricks);
+        if (gs.phase !== undefined) setPhase(gs.phase);
+        if (gs.scores !== undefined) setScores(gs.scores);
+        if (gs.history !== undefined) setHistory(gs.history);
+        if (gs.log !== undefined) setLog(gs.log);
+        if (gs.result !== undefined) setResult(gs.result);
+        if (gs.trumpBroken !== undefined) setTrumpBroken(gs.trumpBroken);
+        if (gs.partnerBanner !== undefined) setPartnerBanner(gs.partnerBanner);
+        if (gs.partnerRevealed !== undefined) setPartnerRevealed(gs.partnerRevealed);
+        
+        Object.assign(R.current, gs); 
+      };
+
+      const pushState = (updates) => {
+        applySharedState(updates); 
+        if (mode === "online" && onlineRoom) {
+          db.ref('rooms/' + onlineRoom.code + '/gameState').update(updates).catch(e => {
+            console.error(e);
+            toast("Sync Error: Check your connection!");
+          });
+        }
+      };
+
+      useEffect(() => {
+        if (mode !== "online" || !onlineRoom) return;
+        const ref = db.ref('rooms/' + onlineRoom.code + '/gameState');
+        const unsub = ref.on('value', snap => {
+          const gs = snap.val();
+          if (gs) applySharedState(gs);
+        });
+        return () => ref.off('value', unsub);
+      }, [mode, onlineRoom]);
+      // ────────────────────────────────
+
+      const getPlayerColor = (pIdx) => {
+        if (!contract || !partnerRevealed) return "var(--text)";
+        const team1 = [contract.declarer, contract.partner];
+        return team1.includes(pIdx) ? "#64b5f6" : "#ff8a65"; 
+      };
+
+      function beginHand(isRedeal = false) {
+        setSel(null); setShowBid(false); setShowPartner(false); setPeeking(false); 
+        setReviewingBids(false); setThinking(false); setPpFor(-1);
+        
+        if (mode === "online" && onlineRoom) {
+            if (onlineRoom.mySeat !== 0 && !isRedeal) return; 
+        }
+        
+        pushState({
+          hands: dealCards(), bids: [null,null,null,null], bidLog: [], curBidder: 0, passRun: 0, 
+          contract: null, trick: [], tricks: [0,0,0,0], curPlayer: 0, log: [], result: null, 
+          trumpBroken: false, partnerBanner: "", partnerRevealed: false, phase: "viewHand"
+        });
+      }
+      
+      useEffect(() => { beginHand(); }, []); 
+
+      const getHighIdx = bs => { 
+        let best = -1; 
+        for (const b of bs) {
+          if (b && b !== "pass") { 
+            const i = bidIdx(b); 
+            if (i > best) best = i; 
+          } 
+        }
+        return best; 
+      };
+
+      useEffect(() => {
+        if (phase !== "bidding") return;
+        const p = R.current.curBidder;
+        const iAm = onlineRoom ? onlineRoom.mySeat : 0;
+        
+        let isHuman = false;
+        if (mode === "solo" && p === 0) isHuman = true;
+        if (mode === "passplay") isHuman = true;
+        if (mode === "online" && p === iAm) isHuman = true;
+
+        if (isHuman) {
+          if (mode === "passplay" && ppFor !== p) { 
+            setMyIdx(p); setPpFor(p); setPpCtx("bid"); setPhase("ppShow"); return; 
+          }
+          setShowBid(true);
+          return;
+        }
+
+        if (mode === "online" && iAm !== 0) return;
+
+        setThinking(true);
+        const t = setTimeout(() => {
+          setThinking(false);
+          doBid(p, aiBidChoice(R.current.hands, p, getHighIdx(R.current.bids)));
+        }, 1200 + Math.random()*800);
+        
+        return () => clearTimeout(t);
+      }, [phase, curBidder]); 
+
+      function doBid(player, bid) {
+        const { bids:bs, passRun:pr } = R.current;
+        const nb = [...bs]; 
+        nb[player] = bid || "pass";
+        const np = !bid ? pr + 1 : 0;
+        const real = nb.filter(b => b && b !== "pass");
+        const done = nb.filter(b => b !== null).length === 4;
+
+        const newLog = [...R.current.log.slice(-5), `${names[player]}: ${bid ? bid.label : "Pass"}`];
+        const newBidLog = [...R.current.bidLog, { p: player, b: bid }];
+
+        pushState({ bids: nb, passRun: np, log: newLog, bidLog: newBidLog });
+
+        if ((np >= 3 && real.length) || (done && !real.length)) {
+          if (!real.length) { 
+            toast("All passed — redealing!"); 
+            setTimeout(() => beginHand(true), 1000); 
+            return; 
+          }
+          finishBidding(nb); 
+          return;
+        }
+        pushState({ curBidder: (player + 1) % 4 });
+      }
+
+      function finishBidding(bs) {
+        let dec = -1; let wb = null;
+        for (let i = 0; i < 4; i++) {
+          if (bs[i] && bs[i] !== "pass") { dec = i; wb = bs[i]; }
+        }
+        const ct = { bid:wb, level:wb.level, suit:wb.suit, declarer:dec, partnerCard:null, partner:-1 };
+        const newLog = [...R.current.log.slice(-5), `Contract: ${wb.label} by ${names[dec]}`];
+        pushState({ contract: ct, phase: "biddingSummary", log: newLog });
+      }
+
+      function continueFromSummary() {
+        const ct = R.current.contract;
+        const iAm = onlineRoom ? onlineRoom.mySeat : 0;
+        
+        let isHuman = false;
+        if (mode === "solo" && ct.declarer === 0) isHuman = true;
+        if (mode === "passplay") isHuman = true;
+        if (mode === "online" && ct.declarer === iAm) isHuman = true;
+
+        if (isHuman) {
+          setMyIdx(ct.declarer);
+          if (mode === "passplay") { 
+            setPpFor(ct.declarer); setPpCtx("partner"); setPhase("ppShow"); 
+          } else { 
+            setPhase("viewHandPartner"); 
+          }
+        } else {
+          pushState({ phase: "partner" });
+          if (mode !== "online" || iAm === 0) { 
+            setTimeout(() => doFinalisePartner(ct, aiPartnerChoice(R.current.hands, ct.declarer)), 900);
+          }
+        }
+      }
+
+      function doFinalisePartner(c, card) {
+        let partner = -1;
+        if (card) {
+          for (let p = 0; p < 4; p++) {
+            if ((R.current.hands[p] || []).find(x => x.id === card.id)) { partner = p; break; }
+          }
+        }
+        const nc = { ...c, partnerCard: card || null, partner };
+        const leader = firstLeader(nc.declarer, nc.suit, gameStyle);
+        const cardStr = card ? `${card.rank}${SYM[card.suit] || ""}` : "?";
+        const newLog = [...R.current.log.slice(-5), `${names[nc.declarer]} calls ${cardStr}`];
+        
+        pushState({ contract: nc, trumpBroken: false, phase: "playing", curPlayer: leader, log: newLog });
+        toast(`Partner card: ${cardStr} 🤫`);
+      }
+
+      useEffect(() => {
+        if (phase !== "playing") return;
+        const p = R.current.curPlayer;
+        const iAm = onlineRoom ? onlineRoom.mySeat : 0;
+        
+        let isHuman = false;
+        if (mode === "solo" && p === 0) isHuman = true;
+        if (mode === "passplay") isHuman = true;
+        if (mode === "online" && p === iAm) isHuman = true;
+
+        if (isHuman) {
+          if (mode === "passplay" && ppFor !== p) { 
+            setMyIdx(p); setPpFor(p); setPpCtx("play"); setPhase("ppShow"); 
+          }
+          return;
+        }
+
+        if (mode === "online" && iAm !== 0) return;
+
+        setThinking(true);
+        const t = setTimeout(() => {
+          setThinking(false);
+          const { hands:hs, trick:tr, contract:ct, trumpBroken:tb } = R.current;
+          doPlay(p, aiPlayChoice(hs, p, tr, ct, tb, gameStyle));
+        }, 800 + Math.random()*700);
+        
+        return () => clearTimeout(t);
+      }, [phase, curPlayer]); 
+
+      function doPlay(player, card) {
+        const { hands:hs, trick:tr, contract:ct, trumpBroken:tb } = R.current;
+        const newH  = hs.map((h,i) => i===player ? h.filter(c => c.id!==card.id) : [...h]);
+        const newTr = [...tr, { player, card }];
+        const newLog = [...R.current.log.slice(-5), `${names[player]}: ${card.rank}${SYM[card.suit] || ""}`];
+
+        let newTb = tb;
+        if (gameStyle==="B" && ct && ct.suit!=="N" && !tb && tr.length>0) {
+          if (card.suit === ct.suit && tr[0].card.suit !== ct.suit) { 
+            newTb = true; toast(`${SYM[ct.suit]} broken!`); 
+          }
+        }
+
+        let pRev = R.current.partnerRevealed;
+        let pBan = R.current.partnerBanner;
+        if (ct && ct.partnerCard && card.id === ct.partnerCard.id) {
+          pRev = true;
+          pBan = `🎉 ${names[player]} is the secret partner!`;
+          toast(`🎉 ${names[player]} is the partner!`);
+          setTimeout(() => setPartnerBanner(""), 4500);
+        }
+
+        setSel(null);
+
+        pushState({
+          hands: newH, trick: newTr, log: newLog,
+          trumpBroken: newTb, partnerRevealed: pRev, partnerBanner: pBan
+        });
+
+        if (newTr.length === 4) {
+          setTimeout(() => {
+            const w = calcWinner(newTr, ct.suit);
+            const nt = [...R.current.tricks]; 
+            nt[w]++;
+            const log2 = [...R.current.log.slice(-5), `${names[w]} wins the trick`];
+            
+            pushState({ tricks: nt, trick: [], curPlayer: w, log: log2 });
+            
+            if (newH[0].length === 0) {
+              setTimeout(() => doEndHand(ct, nt), 500);
+            }
+          }, 1100);
+        } else { 
+          pushState({ curPlayer: (player + 1) % 4 });
+        }
+      }
+
+      function handlePlayCard() {
+        const { hands:hs, trick:tr, trumpBroken:tb } = R.current;
+        if (!sel) return;
+        const card = (hs[myIdx] || []).find(c => c.id === sel);
+        const lg = legalCards(hs, myIdx, tr, contract, tb, gameStyle);
+        
+        if (!lg.find(c => c.id === card?.id)) { 
+          if (gameStyle==="B" && contract?.suit===card?.suit && !tb) {
+            toast("Trump not broken! ⚠️");
+          } else {
+            toast("Must follow suit! ⚠️");
+          }
+          return; 
+        }
+        doPlay(myIdx, card);
+      }
+
+      function doEndHand(ct, finalTricks) {
+        const needed = 6 + ct.level;
+        const team = [ct.declarer];
+        
+        if (ct.partner >= 0 && ct.partner !== ct.declarer) team.push(ct.partner);
+        
+        const made = team.reduce((s,p) => s + finalTricks[p], 0);
+        const win = made >= needed;
+        const pts = ct.level * 50;
+        
+        const isNS = team.includes(0) || team.includes(2);
+        const nsPts = win ? (isNS?pts:0) : (isNS?0:pts);
+        const ewPts = win ? (!isNS?pts:0) : (!isNS?0:pts);
+        const newNS = R.current.scores.ns + nsPts;
+        const newEW = R.current.scores.ew + ewPts;
+        
+        const pCard = ct.partnerCard ? `${ct.partnerCard.rank}${SYM[ct.partnerCard.suit]||""}` : "N/A";
+        const entry = { 
+          label: ct.bid.label, dec: names[ct.declarer], needed, made, win, nsPts, ewPts, 
+          partnerName: ct.partner>=0 ? names[ct.partner] : "N/A", partnerCard: pCard 
+        };
+        
+        pushState({ 
+          scores: { ns: newNS, ew: newEW }, 
+          history: [...R.current.history, entry], 
+          result: { ...entry, newNS, newEW }, 
+          phase: "result" 
+        });
+      }
+
+      // ── RENDER ENGINE ────────────────────────────────────────────────
+      // We process the overlays first so they can be injected into the main view safely
+      
+      let activeOverlay = null;
+
+      if (phase === "viewHand") {
+        activeOverlay = (
+          <HandViewer 
+            hand={hands?.[myIdx]||[]} 
+            playerName={names[myIdx]} 
+            subtitle="Review your cards before bidding" 
+            btnLabel="I'm Ready to Bid" 
+            onContinue={() => pushState({phase: "bidding"})} 
+            onQuit={() => setShowQuit(true)}
+          />
+        );
+      } else if (phase === "viewHandPartner") {
+        activeOverlay = (
+          <HandViewer 
+            hand={hands?.[contract?.declarer||0]||[]} 
+            playerName={names[contract?.declarer||0]} 
+            subtitle="You won the bid! Call a partner card you do NOT hold." 
+            btnLabel="Choose Partner Card →" 
+            onContinue={() => { setPhase("partner"); setShowPartner(true); }} 
+            onQuit={() => setShowQuit(true)}
+          />
+        );
+      } else if (phase === "ppShow") {
+        activeOverlay = (
+          <div style={{ position:"fixed", inset:0, background:"var(--surface)", zIndex:90, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
+            <div style={{ color:"var(--accent)", fontSize:22 }}>{names[ppFor]}'s Turn</div>
+            <div style={{ color:"var(--text-muted)", marginBottom:20 }}>Pass device to {names[ppFor]}</div>
+            <Btn gold onClick={() => setPhase("ppReveal")}>Reveal {names[ppFor]}'s Hand 👁</Btn>
+            <Btn outline onClick={() => setShowQuit(true)} style={{ marginTop: 30, borderColor: "var(--danger)", color: "var(--danger)" }}>Quit Game</Btn>
+          </div>
+        );
+      } else if (phase === "ppReveal") {
+        activeOverlay = (
+          <HandViewer 
+            hand={hands?.[ppFor]||[]} 
+            playerName={names[ppFor]} 
+            subtitle="Review your hand" 
+            btnLabel="Play My Turn" 
+            onContinue={() => { 
+              const c = ppCtx; 
+              setPhase(c==="bid" ? "bidding" : c==="partner" ? "partner" : "playing"); 
+              if (c==="bid") setShowBid(true); 
+              if (c==="partner") setShowPartner(true); 
+            }} 
+            onQuit={() => setShowQuit(true)}
+          />
+        );
+      } else if (phase === "biddingSummary" && contract) {
+        activeOverlay = (
+          <div style={{ position:"fixed", inset:0, background:"var(--modal-bg)", zIndex:90, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:16 }}>
+            <div style={{ background:"var(--surface)", border:`2px solid var(--accent)`, borderRadius:16, padding:20, width:"100%", maxWidth:400, textAlign:"center" }}>
+              <div style={{ color:"var(--accent)", fontSize:24, fontWeight:700, marginBottom:16 }}>Bidding Complete</div>
+              <div style={{ color:"var(--text)", fontSize:16, marginBottom:16 }}>
+                Contract: <b>{contract.bid.label}</b> by <b>{names[contract.declarer]}</b>
+              </div>
+              <div style={{ maxHeight:200, overflowY:"auto", background:"var(--table-bg)", borderRadius:8, padding:10, marginBottom:20, textAlign:"left" }}>
+                {bidLog.map((logItem, i) => ( 
+                  <div key={i} style={{ padding:"4px 0", borderBottom:"1px solid var(--surface-border)", fontSize:14 }}>
+                    <b style={{ color:"var(--accent)", display:"inline-block", width:70 }}>{names[logItem.p]}</b> 
+                    {logItem.b ? logItem.b.label : "Pass"}
+                  </div> 
+                ))}
+              </div>
+              <Btn gold onClick={continueFromSummary}>Continue →</Btn>
+              <Btn outline onClick={() => setShowQuit(true)} style={{ marginTop: 10, borderColor: "var(--danger)", color: "var(--danger)" }}>Quit Game</Btn>
+            </div>
+          </div>
+        );
+      } else if (phase === "result" && result) {
+        activeOverlay = (
+          <div style={{ position:"fixed", inset:0, background:"var(--modal-bg)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:80 }}>
+            <div style={{ background:"var(--surface)", border:`2px solid var(--accent)`, borderRadius:20, padding:"28px 22px", textAlign:"center", maxWidth:340, width:"90%" }}>
+              <div style={{ fontSize:52, marginBottom:8 }}>{result.win?"🎉":"😔"}</div>
+              <div style={{ fontSize:24, color:"var(--accent)", marginBottom:10, fontWeight:700 }}>
+                {result.win ? "Bid Made!" : "Bid Failed!"}
+              </div>
+              <div style={{ background:"var(--table-bg)", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, lineHeight:1.8 }}>
+                <div style={{ color:"var(--accent)", fontWeight:700 }}>Hand Summary</div>
+                <div>Contract: <b>{result.label}</b> by {result.dec}</div>
+                <div>Partner card: <b>{result.partnerCard}</b></div>
+                <div>Secret partner: <b style={{ color:"#66ffaa" }}>{result.partnerName}</b></div>
+              </div>
+              <div style={{ color:"var(--text-muted)", fontSize:14, lineHeight:1.8, marginBottom:18 }}>
+                Needed <b style={{ color:"var(--text)" }}>{result.needed}</b> · Made <b style={{ color:"var(--text)" }}>{result.made}</b><br/>
+                <span style={{ color:"var(--accent)" }}>NS: +{result.nsPts}</span>&nbsp;|&nbsp;
+                <span style={{ color:"var(--danger)" }}>EW: +{result.ewPts}</span><br/>
+                <span style={{ fontSize:12 }}>Running — NS: {result.newNS} | EW: {result.newEW}</span>
+              </div>
+              <Btn gold onClick={() => beginHand(false)}>Next Hand →</Btn>
+              <Btn outline onClick={onMenu}>Main Menu</Btn>
+            </div>
+          </div>
+        );
+      }
+
+      if (!hands || !hands[0]) {
+        return (
+          <div style={{ position:"fixed", inset:0, background:"var(--bg-game)", display:"flex", alignItems:"center", justifyContent:"center", color:"var(--accent)", fontSize:20 }}>
+            Dealing...
+          </div>
+        );
+      }
+
+      const myHand = sortHand(hands[myIdx] || []);
+      
+      let isMyTurn = false;
+      if (phase === "playing") {
+        if (mode === "solo" && curPlayer === 0) isMyTurn = true;
+        if (mode === "passplay" && curPlayer === myIdx) isMyTurn = true;
+        if (mode === "online" && curPlayer === myIdx) isMyTurn = true;
+      }
+      
+      const tb = R.current.trumpBroken;
+      const isNT = contract?.suit === "N";
+      const lg = isMyTurn ? legalCards(hands, myIdx, trick, contract, tb, gameStyle) : [];
+      
+      const getPos = d => { 
+        const b = {position:"absolute", display:"flex", alignItems:"center", justifyContent:"center"}; 
+        if (d==="N") return {...b, top:0, left:"50%", transform:"translateX(-50%)"};
+        if (d==="S") return {...b, bottom:0, left:"50%", transform:"translateX(-50%)"};
+        if (d==="W") return {...b, left:0, top:"50%", transform:"translateY(-50%)"};
+        return {...b, right:0, top:"50%", transform:"translateY(-50%)"};
+      };
+
+      return (
+        <div style={{ position:"fixed", inset:0, background:"var(--bg-game)", overflow:"hidden" }}>
+          
+          {activeOverlay}
+
+          <Toast msg={toastMsg} />
+          
+          <div style={{ position:"absolute", top:0, left:0, right:0, height:44, background:"var(--surface)", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 10px", zIndex:10, borderBottom:"1px solid var(--surface-border)" }}>
+            <div style={{ color:"var(--accent)", fontSize:13, fontWeight:700 }}>Bridge</div>
+            <div style={{ background:"var(--table-bg)", border:`1px solid var(--accent)`, borderRadius:20, padding:"3px 10px", color:"var(--accent)", fontSize:11 }}>
+              {contract ? `${contract.bid.label} by ${names[contract.declarer]}` : "Bidding..."}
+            </div>
+            <div style={{ display:"flex", gap:6 }}>
+              <button onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "hc" : "dark")} style={{ background:"transparent", border:"1px solid var(--surface-border)", color:"var(--accent)", borderRadius:6, padding:"4px 8px", fontSize:11, cursor:"pointer", fontFamily:"Georgia,serif" }}>🎨</button>
+              <button onClick={() => setShowScore(true)} style={{ background:"transparent", border:"1px solid var(--surface-border)", color:"var(--accent)", borderRadius:6, padding:"4px 8px", fontSize:11, cursor:"pointer", fontFamily:"Georgia,serif" }}>Score</button>
+              <button onClick={() => setShowQuit(true)} style={{ background:"transparent", border:"1px solid var(--danger)", color:"var(--danger)", borderRadius:6, padding:"4px 8px", fontSize:11, cursor:"pointer", fontFamily:"Georgia,serif" }}>Quit</button>
+            </div>
+          </div>
+
+          {contract && (
+            <div style={{ position:"absolute", top:44, left:0, right:0, background:"var(--table-bg)", padding:"3px 8px", display:"flex", justifyContent:"center", gap:12, fontSize:11, borderBottom:"1px solid var(--surface-border)", zIndex:9 }}>
+              {names.map((n,i) => (
+                <span key={i} style={{ color: getPlayerColor(i), transition: "color 0.3s" }}>
+                  {n}: <b style={{ color:"var(--accent)" }}>{tricks[i]}</b>
+                </span>
+              ))}
+              <span style={{ color:"var(--danger)" }}>Need <b>{6+contract.level}</b></span>
+            </div>
+          )}
+
+          {partnerBanner && (
+            <div style={{ position:"absolute", top:contract?68:44, left:0, right:0, zIndex:15, background:"var(--accent-bg)", color:"var(--accent-text)", padding:"6px 12px", fontSize:13, fontWeight:700, textAlign:"center" }}>
+              {partnerBanner}
+            </div>
+          )}
+
+          <div style={{ position:"absolute", top:contract?88:44, bottom:220, left:0, right:0 }}>
+            <div style={{ position:"absolute", top:2, left:"50%", transform:"translateX(-50%)", display:"flex", gap:2 }}>
+              {(hands[2]||[]).map((_,i) => <CardBack key={i} />)}
+            </div>
+            <div style={{ position:"absolute", left:2, top:"50%", transform:"translateY(-50%)", display:"flex", flexDirection:"column", gap:2 }}>
+              {(hands[1]||[]).map((_,i) => <CardBack key={i} col />)}
+            </div>
+            <div style={{ position:"absolute", right:2, top:"50%", transform:"translateY(-50%)", display:"flex", flexDirection:"column", gap:2 }}>
+              {(hands[3]||[]).map((_,i) => <CardBack key={i} col />)}
+            </div>
+
+            {/* Bidding Speech Bubbles */}
+            {phase === "bidding" && [0,1,2,3].map(p => {
+              const b = bids[p];
+              const isThink = thinking && curBidder === p;
+              if (!b && !isThink) return null;
+              
+              const txt = isThink ? "🤔..." : (b === "pass" ? "Pass" : b.label);
+              const dir = (p + 4 - myIdx) % 4; 
+              if (dir === 0 && !b) return null; 
+
+              let pos = { bottom: 10, left: "50%", transform: "translateX(-50%)" };
+              if (dir === 2) {
+                pos = { top: 60, left: "50%", transform: "translateX(-50%)" };
+              } else if (dir === 1) {
+                pos = { left: 70, top: "45%", transform: "translateY(-50%)" };
+              } else if (dir === 3) {
+                pos = { right: 70, top: "45%", transform: "translateY(-50%)" };
+              }
+                        
+              return (
+                <div key={p} style={{ 
+                  position: "absolute", background: "var(--surface)", color: "var(--text)", 
+                  border: `2px solid var(--accent)`, borderRadius: 16, padding: "6px 14px", 
+                  fontSize: 14, fontWeight: "bold", zIndex: 50, 
+                  boxShadow: "0 4px 10px rgba(0,0,0,.5)", whiteSpace: "nowrap", ...pos 
+                }}>
+                  {names[p]}: {txt}
+                </div>
+              );
+            })}
+
+            {[
+              ["N",names[2],{top:40,left:"50%",transform:"translateX(-50%)"}, 2], 
+              ["W",names[1],{left:32,top:"50%",transform:"translateY(-50%)"}, 1], 
+              ["E",names[3],{right:32,top:"50%",transform:"translateY(-50%)"}, 3]
+            ].map(([k,n,st,pIdx]) => (
+              <div key={k} style={{ position:"absolute", fontSize:10, background:"var(--table-bg)", color: getPlayerColor(pIdx), padding:"2px 7px", borderRadius:10, transition: "color 0.3s", ...st }}>
+                {n}
+              </div>
+            ))}
+
+            {phase==="playing" && (
+              <div style={{ position:"absolute", bottom:4, left:"50%", transform:"translateX(-50%)", background:"var(--table-bg)", borderRadius:10, padding:"2px 10px", color:curPlayer===myIdx?"var(--accent)":"var(--text-muted)", fontSize:11 }}>
+                {curPlayer===myIdx ? "Your turn!" : names[curPlayer]+"'s turn..."}
+              </div>
+            )}
+
+            <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-55%)", width:170, height:170 }}>
+              {[0,1,2,3].map(p => { 
+                const entry = trick.find(t => t.player===p); 
+                return (
+                  <div key={p} style={getPos(["S","W","N","E"][p])}>
+                    {entry && <CardFace card={entry.card} size="sm" />}
+                  </div>
+                ); 
+              })}
+            </div>
+          </div>
+
+          <div style={{ position:"absolute", bottom:0, left:0, right:0, height:220, background:"var(--surface)", borderTop:"2px solid var(--surface-border)", display:"flex", flexDirection:"column", zIndex:20 }}>
+            <div style={{ padding:"6px 12px 2px", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0 }}>
+              <div style={{ color: getPlayerColor(myIdx), fontSize:13, fontWeight:700, transition:"color 0.3s" }}>{names[myIdx]}</div>
+              <button onClick={() => setPhase("handPeek")} style={{ background:"transparent", border:"1px solid var(--surface-border)", color:"var(--accent)", borderRadius:6, padding:"3px 10px", fontSize:11, cursor:"pointer" }}>
+                View Full Hand
+              </button>
+            </div>
+            <div style={{ flex:1, overflowX:"auto", display:"flex", alignItems:"center", padding:"4px 8px", gap:4 }}>
+              {myHand.map(c => (
+                <CardFace 
+                  key={c.id} card={c} selected={sel===c.id} 
+                  dimmed={isMyTurn && !lg.find(x => x.id===c.id)} 
+                  onClick={() => { if (!isMyTurn) return; setSel(p => p===c.id ? null : c.id); }} 
+                />
+              ))}
+            </div>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:12, padding:"6px 12px 10px", minHeight:44, flexShrink:0 }}>
+              {isMyTurn && sel ? ( 
+                <React.Fragment> 
+                  <button onClick={handlePlayCard} style={{ background:"var(--accent)", color:"var(--accent-text)", border:"none", borderRadius:8, padding:"8px 28px", fontSize:15, fontWeight:700, cursor:"pointer" }}>
+                    Play Card
+                  </button> 
+                  <span style={{ color:"var(--text-muted)", fontSize:12 }}>tap to deselect</span> 
+                </React.Fragment> 
+              ) : ( 
+                <span style={{ color:"var(--text-muted)", fontSize:13 }}>
+                  {isMyTurn ? "Tap a card to select" : phase==="playing" ? `Waiting for ${names[curPlayer||0]}...` : ""}
+                </span> 
+              )}
+            </div>
+          </div>
+
+          <div style={{ position:"absolute", bottom:0, left:0, right:0, height:16, background:"var(--surface)", fontSize:10, color:"var(--text-muted)", display:"flex", alignItems:"center", padding:"0 8px", overflow:"hidden", whiteSpace:"nowrap", zIndex:25 }}>
+            {log.slice(-3).join("  ·  ")}
+          </div>
+
+          {showScore && (
+            <div style={{ position:"fixed", inset:0, background:"var(--modal-bg)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center" }}>
+              <div style={{ background:"var(--surface)", border:`2px solid var(--accent)`, borderRadius:20, padding:"24px 20px", textAlign:"center", maxWidth:340, width:"90%" }}>
+                <div style={{ fontSize:22, color:"var(--accent)", marginBottom:12, fontWeight:700 }}>Scores</div>
+                <div style={{ display:"flex", justifyContent:"center", gap:32, marginBottom:14 }}>
+                  <div><div style={{ color:"var(--text-muted)" }}>NS</div><div style={{ fontSize:36, color:"var(--accent)", fontWeight:700 }}>{scores.ns}</div></div>
+                  <div><div style={{ color:"var(--text-muted)" }}>EW</div><div style={{ fontSize:36, color:"var(--danger)", fontWeight:700 }}>{scores.ew}</div></div>
+                </div>
+                <div style={{ maxHeight:150, overflowY:"auto", fontSize:12, color:"var(--text)", marginBottom:14, textAlign:"left" }}>
+                  {(history||[]).slice(-8).reverse().map((r,i) => (
+                    <div key={i} style={{ borderBottom:"1px solid var(--surface-border)", padding:"5px 0" }}>
+                      <b style={{ color:"var(--accent)" }}>{r.label}</b> · {r.dec} &amp; {r.partnerName} · {r.win?"✅":"❌"}
+                    </div>
+                  ))}
+                </div>
+                <Btn gold onClick={() => setShowScore(false)}>Close</Btn>
+              </div>
+            </div>
+          )}
+
+          {/* ── BID MODAL WITH PEEK & REVIEW SUPPORT ── */}
+          {showBid && (
+            <div style={{ position:"fixed", inset:0, background: (peeking || reviewingBids) ? "transparent" : "var(--modal-bg)", zIndex:60, display:"flex", alignItems:"flex-end", justifyContent:"center", paddingBottom:16, pointerEvents: (peeking || reviewingBids) ? "none" : "auto" }}>
+              
+              {peeking ? (
+                 <button onClick={() => setPeeking(false)} style={{ pointerEvents:"auto", position:"absolute", bottom: 250, padding:"12px 24px", borderRadius:20, background:"var(--accent)", color:"var(--accent-text)", border:"none", fontWeight:"bold", cursor:"pointer" }}>
+                   ↑ Back to Bidding
+                 </button>
+              ) : reviewingBids ? (
+                 <div style={{ pointerEvents:"auto", position:"absolute", bottom: "10%", background:"var(--surface)", border:"2px solid var(--accent)", borderRadius:16, padding:20, width:"90%", maxWidth:400, textAlign:"center", boxShadow:"0 8px 32px rgba(0,0,0,.8)" }}>
+                   <div style={{ color:"var(--accent)", fontSize:20, fontWeight:700, marginBottom:16 }}>Bid History</div>
+                   <div style={{ maxHeight:200, overflowY:"auto", background:"var(--table-bg)", borderRadius:8, padding:10, marginBottom:16, textAlign:"left" }}>
+                     {bidLog.length === 0 ? (
+                       <div style={{ color:"var(--text-muted)", textAlign:"center", fontSize:14 }}>No bids yet</div>
+                     ) : bidLog.map((logItem, i) => ( 
+                       <div key={i} style={{ padding:"4px 0", borderBottom:"1px solid var(--surface-border)", fontSize:14 }}>
+                         <b style={{ color:"var(--accent)", display:"inline-block", width:70 }}>{names[logItem.p]}</b> 
+                         {logItem.b ? logItem.b.label : "Pass"}
+                       </div> 
+                     ))}
+                   </div>
+                   <button onClick={() => setReviewingBids(false)} style={{ padding:"12px 24px", borderRadius:12, background:"var(--accent)", color:"var(--accent-text)", border:"none", fontWeight:"bold", cursor:"pointer", width:"100%", fontSize:16 }}>
+                     Back to Bidding
+                   </button>
+                 </div>
+              ) : (
+                <div style={{ background:"var(--surface)", border:"1.5px solid var(--surface-border)", borderRadius:"20px 20px 16px 16px", width:"95%", maxWidth:460, padding:20, pointerEvents:"auto" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                    <div style={{ color:"var(--accent)", fontSize:18, fontWeight:700 }}>Your Bid</div>
+                    <div style={{ display:"flex", gap: 8 }}>
+                      <button onClick={() => setReviewingBids(true)} style={{ background:"transparent", color:"var(--text-muted)", border:"1px solid var(--text-muted)", borderRadius:6, padding:"4px 8px", fontSize:12, cursor:"pointer" }}>
+                        📜 Review Bids
+                      </button>
+                      <button onClick={() => setPeeking(true)} style={{ background:"transparent", color:"var(--text-muted)", border:"1px solid var(--text-muted)", borderRadius:6, padding:"4px 8px", fontSize:12, cursor:"pointer" }}>
+                        👁 Peek at Hand
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ color:"var(--text-muted)", fontSize:12, textAlign:"center", marginBottom:12 }}>
+                    Your HCP: <b style={{ color:"var(--accent)" }}>{hands ? hcp(hands[curBidder]) : 0}</b>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:6, marginBottom:12 }}>
+                    {ALL_BIDS.map((b,i) => {
+                      const cols = { 
+                        S:{ bg:"#1a237e", bc:"#5c6bc0", c:"#fff" }, 
+                        H:{ bg:"#4a0000", bc:"#ef5350", c:"#fff" }, 
+                        D:{ bg:"#4a2000", bc:"#ff8a65", c:"#fff" }, 
+                        C:{ bg:"#002a00", bc:"#66bb6a", c:"#fff" }, 
+                        N:{ bg:"#222018", bc:"#aaa890", c:"#fff" } 
+                      };
+                      const cl  = cols[b.suit];
+                      const dis = bidIdx(b) <= getHighIdx(bids);
+                      return (
+                        <button key={i} disabled={dis} onClick={() => { setShowBid(false); doBid(curBidder, b); }} style={{ padding:"8px 2px", borderRadius:9, border:`1.5px solid ${cl.bc}`, background:cl.bg, color:cl.c, fontSize: b.suit==="N" ? 11 : 14, fontWeight:700, cursor:dis?"default":"pointer", opacity:dis?0.18:1 }}>
+                          {b.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button onClick={() => { setShowBid(false); doBid(curBidder, null); }} style={{ width:"100%", padding:11, background:"var(--table-bg)", border:"1.5px solid var(--surface-border)", borderRadius:9, color:"var(--text)", fontSize:15, cursor:"pointer" }}>
+                    Pass
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {showPartner && contract && (
+            <div style={{ position:"fixed", inset:0, background:"var(--modal-bg)", zIndex:60, display:"flex", alignItems:"flex-end", justifyContent:"center", paddingBottom:16 }}>
+              <div style={{ background:"var(--surface)", border:"1.5px solid var(--surface-border)", borderRadius:"20px 20px 16px 16px", width:"95%", maxWidth:440, padding:20 }}>
+                <div style={{ color:"var(--accent)", fontSize:17, textAlign:"center", marginBottom:4, fontWeight:700 }}>
+                  Call Your Partner Card{isNT ? " (No Trump)" : ""}
+                </div>
+                <div style={{ color:"var(--text-muted)", fontSize:13, textAlign:"center", marginBottom:14 }}>
+                  Pick a card you do NOT hold in your hand
+                </div>
+                <div style={{ display:"flex", gap:8, justifyContent:"center", marginBottom:12 }}>
+                  {SUITS.map(s => {
+                    const cl = { 
+                      S:{ bg:"#1a237e", bc:"#9fa8da", c:"#fff" }, 
+                      H:{ bg:"#4a0000", bc:"#ffcdd2", c:"#fff" }, 
+                      D:{ bg:"#4a2000", bc:"#ffccbc", c:"#fff" }, 
+                      C:{ bg:"#002a00", bc:"#c8e6c9", c:"#fff" } 
+                    }[s];
+                    return (
+                      <button key={s} onClick={() => setPSuit(s)} style={{ padding:"10px 16px", borderRadius:9, border:`1.5px solid ${cl.bc}`, background:cl.bg, color:cl.c, fontSize:20, cursor:"pointer", outline:pSuit===s?`2.5px solid var(--accent)`:"none" }}>
+                        {SYM[s]}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:5, marginBottom:14 }}>
+                  {[...RANKS].reverse().map(r => {
+                    const iHave = (hands[contract.declarer]||[]).find(c => c.suit===pSuit && c.rank===r);
+                    return (
+                      <button key={r} disabled={!!iHave} onClick={() => setPRank(r)} style={{ padding:"9px 4px", borderRadius:8, border:`1.5px solid ${iHave?"#2a2a2a":"#7c4dff"}`, background:iHave?"#0a0a0a":"#1a1a2e", color:iHave?"#2a2a2a":"#fff", cursor:iHave?"not-allowed":"pointer", fontSize:13, outline:pRank===r&&!iHave?`2px solid var(--accent)`:"none" }}>
+                        {r}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button disabled={!!(hands[contract.declarer]||[]).find(c => c.suit===pSuit && c.rank===pRank)} onClick={() => { setShowPartner(false); doFinalisePartner(contract, { suit:pSuit, rank:pRank, id:pRank+pSuit }); }} style={{ width:"100%", padding:13, borderRadius:12, border:"none", fontSize:16, fontWeight:700, cursor:"pointer", background:"var(--accent-bg)", color:"var(--accent-text)", opacity:(hands[contract.declarer]||[]).find(c=>c.suit===pSuit&&c.rank===pRank)?0.25:1 }}>
+                  Call {pRank}{SYM[pSuit]} as Partner Card
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showQuit && (
+            <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.88)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center" }}>
+              <div style={{ background:"var(--surface)", border:"2px solid var(--danger)", borderRadius:20, padding:"28px 22px", textAlign:"center", maxWidth:300, width:"90%" }}>
+                <div style={{ fontSize:40, marginBottom:8 }}>⚠️</div>
+                <div style={{ fontSize:20, color:"var(--danger)", marginBottom:20, fontWeight:700 }}>Quit Game?</div>
+                <button onClick={onMenu} style={{ display:"block", width:"100%", padding:"13px", borderRadius:12, border:"none", fontSize:16, fontWeight:700, cursor:"pointer", background:"var(--danger)", color:"#fff", marginBottom:10 }}>
+                  Yes, Quit to Main Menu
+                </button>
+                <button onClick={() => setShowQuit(false)} style={{ display:"block", width:"100%", padding:"13px", borderRadius:12, border:`2px solid var(--accent)`, fontSize:16, fontWeight:700, cursor:"pointer", background:"transparent", color:"var(--accent)" }}>
+                  Keep Playing
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function ModeScreen({ onSolo, onPP, onOnline, onBack }) { 
+      return (
+        <div style={{ position:"fixed", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:16 }}>
+          <div style={{ fontSize:22, color:"var(--accent)", fontWeight:700, marginBottom:20 }}>Choose Mode</div>
+          <Btn gold onClick={onSolo}>🤖 vs Computer</Btn>
+          <Btn outline onClick={onPP}>👥 Pass and Play</Btn>
+          <Btn blue onClick={onOnline}>🌐 Online Multiplayer</Btn>
+          <Btn outline onClick={onBack}>← Back</Btn>
+        </div>
+      ); 
+    }
+
+    function LobbyScreen({ onStart, onBack }) { 
+      const [ns, setNs] = useState(["South","West","North","East"]); 
+      return (
+        <div style={{ position:"fixed", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:16 }}>
+          <div style={{ background:"var(--surface)", border:"1px solid var(--surface-border)", borderRadius:16, padding:20, width:"90%", maxWidth:360 }}>
+            <div style={{ fontSize:20, color:"var(--accent)", fontWeight:700, textAlign:"center", marginBottom:14 }}>Pass and Play</div>
+            {["South","West","North","East"].map((def,i) => (
+              <div key={i}>
+                <div style={{ color:"var(--text-muted)", fontSize:13, marginBottom:4 }}>{def}</div>
+                <input value={ns[i]} onChange={e => { const n=[...ns]; n[i]=e.target.value; setNs(n); }} style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid var(--surface-border)", background:"var(--table-bg)", color:"var(--text)", fontSize:15, outline:"none", marginBottom:12 }} />
+              </div>
+            ))}
+            <Btn gold onClick={() => onStart(ns)}>Start Game →</Btn>
+            <Btn outline onClick={onBack}>← Back</Btn>
+          </div>
+        </div>
+      ); 
+    }
+
+    function OnlineSetup({ onJoined, onBack }) {
+      const [myName, setMyName] = useState("");
+      const [code, setCode] = useState("");
+      const [status, setStatus] = useState("");
+      const [waiting, setWaiting] = useState(null);
+      const [mySeat, setMySeat] = useState(-1);
+      const pollRef = useRef(null);
+      
+      const genCode = () => Array.from({length:5}, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random()*32)]).join("");
+      
+      async function createRoom() { 
+        if(!myName.trim()){setStatus("Enter name!");return;} 
+        const c = genCode();
+        const room = {code:c, players:[{name:myName.trim(),seat:0}], started:false, gameState:null}; 
+        await window.storage.set(c, room); 
+        setCode(c); setMySeat(0); setWaiting(room); setStatus(""); 
+        startPoll(c, 0); 
+      }
+      
+      async function joinRoom() { 
+        if(!myName.trim()||!code.trim()){setStatus("Enter name and code!");return;} 
+        const c = code.trim().toUpperCase();
+        const room = await window.storage.get(c); 
+        if(!room){setStatus("Room not found");return;} 
+        if(room.started||room.players.length>=4){setStatus("Room full/started");return;} 
+        const seat = room.players.length; 
+        room.players.push({name:myName.trim(), seat}); 
+        await window.storage.set(c, room); 
+        setMySeat(seat); setWaiting(room); setStatus(""); 
+        startPoll(c, seat); 
+      }
+      
+      function startPoll(c, seat) { 
+        if(pollRef.current) clearInterval(pollRef.current); 
+        pollRef.current = setInterval(async () => { 
+          const r = await window.storage.get(c); 
+          if(!r) return; 
+          setWaiting({...r}); 
+          if(r.started && r.gameState) { 
+            clearInterval(pollRef.current); 
+            onJoined({code:c, mySeat:seat}, [0,1,2,3].map(i => r.players.find(p=>p.seat===i)?.name || ["South","West","North","East"][i])); 
+          } 
+        }, 1500); 
+      }
+      
+      async function startGame() { 
+        const room = await window.storage.get(waiting.code); 
+        if(!room) return; 
+        for(let i=0;i<4;i++) {
+          if(!room.players.find(p=>p.seat===i)) room.players.push({name:["South","West","North","East"][i], seat:i, isAI:true}); 
+        }
+        room.started=true; 
+        // GameScreen Host deals the cards and pushes initial game state
+        await window.storage.set(waiting.code, room); 
+      }
+      
+      useEffect(() => () => { if(pollRef.current) clearInterval(pollRef.current); }, []);
+
+      if (waiting) {
+        return (
+          <div style={{ position:"fixed", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:16 }}>
+            <div style={{ background:"var(--surface)", border:"1px solid var(--surface-border)", borderRadius:16, padding:22, width:"90%", maxWidth:360 }}>
+              <div style={{ color:"var(--accent)", fontSize:20, fontWeight:700, textAlign:"center", marginBottom:14 }}>Waiting... Code: {waiting.code}</div>
+              {mySeat===0 && <Btn gold onClick={startGame}>Start Game →</Btn>}
+              <Btn outline onClick={onBack}>Leave</Btn>
+            </div>
+          </div>
+        );
+      }
+      
+      return (
+        <div style={{ position:"fixed", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:16 }}>
+          <div style={{ background:"var(--surface)", border:"1px solid var(--surface-border)", borderRadius:16, padding:22, width:"90%", maxWidth:360 }}>
+            <div style={{ color:"var(--accent)", fontSize:20, fontWeight:700, textAlign:"center", marginBottom:14 }}>Online Multiplayer</div>
+            <input value={myName} onChange={e=>setMyName(e.target.value)} placeholder="Your Name" style={{ width:"100%", padding:"10px", marginBottom:12 }} />
+            <input value={code} onChange={e=>setCode(e.target.value.toUpperCase())} placeholder="Room Code (to join)" style={{ width:"100%", padding:"10px", marginBottom:12 }} />
+            {status && <div style={{ color:"var(--danger)", textAlign:"center", marginBottom:8 }}>{status}</div>}
+            <Btn gold onClick={createRoom}>Create Room</Btn>
+            <Btn blue onClick={joinRoom}>Join Room</Btn>
+            <Btn outline onClick={onBack}>← Back</Btn>
+          </div>
+        </div>
+      );
+    }
+
+    function TutScreen({ onPlay, onBack }) { 
+      const items = [
+        ["Goal","Win tricks combined with your secret partner to fulfil the bid. North-South vs East-West."],
+        ["Bid Order","1♣ < 1♦ < 1♥ < 1♠ < 1NT < 2♣ ... up to 7NT. NT (No Trump) ranks highest in each level. Each bid must beat the last."],
+        ["1. Bidding","Players bid or pass. 2♥ = team wins at least 8 tricks (6+2) with Hearts as trump. 1NT = 7 tricks, no trump suit. 3 passes in a row ends bidding."],
+        ["2. Partner Card ★","The Declarer (bid winner) names a card they do NOT hold — works for BOTH trump and No Trump contracts. Whoever holds that card is secretly their partner for this hand!"],
+        ["3. Who Leads First?","Style A: Left of declarer always leads first.\nStyle B with trump suit: left of declarer leads.\nStyle B with No Trump: declarer leads first."],
+        ["4. Tricks","Must follow the led suit if possible. Highest card in led suit wins unless someone plays trump. NT has no trump — highest card of led suit always wins."],
+        ["5. Trump Breaking (Style B)","Trump cannot be led until broken — someone plays trump because they ran out of the led suit (a ruff). After that, trump can be led freely."],
+        ["6. Scoring","Need 6 + bid level tricks combined with your secret partner. Make it: +50 × level for your team. Fail: +50 × level for the other team."],
+        ["Tips","HCP: A=4 K=3 Q=2 J=1. Need 13+ HCP to open bidding. Balanced hand (2–5 cards per suit) with 15+ HCP? Consider No Trump!"]
+      ];
+      return (
+        <div style={{ position:"fixed", inset:0, overflowY:"auto", background:"var(--bg-grad)", display:"flex", flexDirection:"column", alignItems:"center", padding:16, zIndex:100 }}>
+          <div style={{ width:"100%", maxWidth:460, paddingBottom:20 }}>
+            <div style={{ fontSize:24, color:"var(--accent)", fontWeight:700, textAlign:"center", marginBottom:16 }}>How to Play</div>
+            {items.map(([t,c]) => (
+              <div key={t} style={{ background:"var(--table-bg)", border:"1px solid var(--surface-border)", borderRadius:14, padding:14, marginBottom:12 }}>
+                <div style={{ color:"var(--accent)", fontSize:15, marginBottom:5, fontWeight:700 }}>{t}</div>
+                <div style={{ color:"var(--text)", fontSize:13, lineHeight:1.65, whiteSpace:"pre-line" }}>{c}</div>
+              </div>
+            ))}
+            <Btn gold onClick={onPlay}>Let's Play →</Btn>
+            <Btn outline onClick={onBack}>← Back</Btn>
+          </div>
+        </div>
+      ); 
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
