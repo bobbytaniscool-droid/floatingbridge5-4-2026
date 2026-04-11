@@ -863,11 +863,25 @@
           />
         );
       } else if (phase === "ppShow") {
+        // Check if the player has made a bid yet to determine if it's their first turn
+        const isFirstLook = bids[ppFor] === null;
+
         activeOverlay = (
           <div style={{ position:"fixed", inset:0, background:"var(--surface)", zIndex:90, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
             <div style={{ color:"var(--accent)", fontSize:22 }}>{names[ppFor]}'s Turn</div>
             <div style={{ color:"var(--text-muted)", marginBottom:20 }}>Pass device to {names[ppFor]}</div>
-            <Btn gold onClick={() => setPhase("ppReveal")}>Reveal {names[ppFor]}'s Hand 👁</Btn>
+            
+            {isFirstLook ? (
+              <Btn gold onClick={() => setPhase("ppReveal")}>Reveal {names[ppFor]}'s Hand 👁</Btn>
+            ) : (
+              <Btn gold onClick={() => { 
+                const c = ppCtx; 
+                setPhase(c==="bid" ? "bidding" : c==="partner" ? "partner" : "playing"); 
+                if (c==="bid") setShowBid(true); 
+                if (c==="partner") setShowPartner(true); 
+              }}>Play My Turn ▶</Btn>
+            )}
+
             <Btn outline onClick={() => setShowQuit(true)} style={{ marginTop: 30, borderColor: "var(--danger)", color: "var(--danger)" }}>Quit Game</Btn>
           </div>
         );
